@@ -10,6 +10,8 @@ int main(int argc, char *argv[]) {
 	struct sffs fs;
 	
 	flash_init(&fl, 32768);
+	flash_chip_erase(&fl);
+
 	sffs_format(&fl);
 	
 	sffs_init(&fs);

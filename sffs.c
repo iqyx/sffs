@@ -31,25 +31,108 @@
 #include "flash_emulator.h"
 
 
+
+/**
+ * Initialize SFFS filesystem structure and allocate all required resources.
+ * This functions must be called prior to any other operation on the filesystem.
+ * 
+ * @param fs A filesystem structure to initialize.
+ * 
+ * @return SFFS_INIT_OK on success or
+ *         SFFS_INIT_FAILED otherwise.
+ */
 int32_t sffs_init(struct sffs *fs) {
+	assert(fs != NULL);
 	
+	/* nothing to initialize yet */
+	return SFFS_INIT_OK;
 }
 
 
+/**
+ * Mounts SFFS filesystem from a flash device. Mount operation fetches required
+ * information from the flash, initializes page cache (if enabled), checks master
+ * block if it is valid and marks the filesystem as mounted.
+ * 
+ * @param fs A SFFS filesystem structure where the flash will be mounted to.
+ * @param flash A flash device to be mounted.
+ * 
+ * @return SFFS_MOUNT_OK on success or
+ *         SFFS_MOUNT_FAILED otherwise.
+ */
 int32_t sffs_mount(struct sffs *fs, struct flash_dev *flash) {
-	
+	assert(fs != NULL);
+	assert(flash != NULL);
+
+	struct flash_info info;
+	if (flash_get_info(flash, &info) != FLASH_GET_INFO_OK) {
+		return SFFS_MOUNT_FAILED;
+	}
+
+	fs->flash = flash;
+	fs->page_size = info.page_size;
+	fs->sector_size = info.sector_size;
+	fs->sector_count = info.capacity / info.sector_size;
+	fs->data_pages_per_sector =
+		(info.sector_size - sizeof(struct sffs_metadata_header)) /
+		(sizeof(struct sffs_metadata_item) + info.page_size);
+	fs->first_data_page = info.sector_size / info.page_size - fs->data_pages_per_sector;
+
+	/* TODO: check flash geometry and computed values */
+
+	if (sffs_cache_clear(fs) != SFFS_CACHE_CLEAR_OK) {
+		return SFFS_MOUNT_FAILED;
+	}
+
+	/* Find first page of file "0", it should contain filesystem metadata */
+	struct sffs_master_page master;
+	struct sffs_file f;
+	sffs_open_id(&f, 0);
+	sffs_read(&f, (unsigned char *)&master, sizeof(master));
+	sffs_close(&f);
+
+	/* TODO: check SFFS master page for validity */
+	/* TODO: fetch filesystem label */
+
+	return SFFS_MOUNT_OK;
 }
 
 
+/**
+ * Free SFFS filesystem and all allocated resources.
+ * 
+ * @param fs A filesystem to free.
+ * 
+ * @return SFFS_FREE_OK on success or
+ *         SFFS_FREE_FAILED otherwise.
+ */
 int32_t sffs_free(struct sffs *fs) {
+	assert(fs != NULL);
 	
+	/* nothing to do yet */
+	return SFFS_FREE_OK;
+}
+
+
+/**
+ * Clears all pages from filesystem cache.
+ * 
+ * @param fs A filesystem with cache to clear.
+ * 
+ * @return SFFS_CACHE_CLEAR_OK on success or
+ *         SFFS_CACHE_CLEAR_FAILED odtherwise.
+ */
+int32_t sffs_cache_clear(struct sffs *fs) {
+	assert(fs != NULL);
+
+	return SFFS_CACHE_CLEAR_OK;
 }
 
 
 /**
  * Create new SFFS filesystem on flash memory. Flash memory cannot be mounted
  * during this operation. Information about memory geometry is fetched directly
- * from flash.
+ * from the flash.
  * 
  * @param flash A flash device to create SFFS filesystem on.
  * 
@@ -63,7 +146,9 @@ int32_t sffs_format(struct flash_dev *flash) {
 	flash_get_info(flash, &info);
 	
 	/* TODO: compute data page count */
-	uint32_t data_page_count = 0;
+	uint32_t data_page_count =
+		(info.sector_size - sizeof(struct sffs_metadata_header)) /
+		(sizeof(struct sffs_metadata_item) + info.page_size);
 	
 	for (uint32_t sector = 0; sector < (info.capacity / info.sector_size); sector++) {
 
@@ -80,19 +165,62 @@ int32_t sffs_format(struct flash_dev *flash) {
 			struct sffs_metadata_item item;
 			item.file_id = 0xffff;
 			item.block = 0xffff;
-			item.state = 0xff;
+			item.state = SFFS_PAGE_STATE_ERASED;
 			item.size = 0xffff;
 			
 			flash_page_write(flash, info.sector_size * sector + sizeof(header) + i * sizeof(item), (uint8_t *)&item, sizeof(item));
 		}
 	}
+	/* TODO: write master page */
 	
 	return SFFS_FORMAT_OK;
 }
 
 
+/**
+ * Print filesystem structure to stdout. It can help to visualize  how pages and
+ * sectors are managed.
+ * 
+ * @param fs A filesstem to print.
+ * 
+ * @return SFFS_DEBUG_PRINT_OK.
+ */
 int32_t sffs_debug_print(struct sffs *fs) {
-	
+	assert(fs != NULL);
+
+	for (uint32_t sector = 0; sector < fs->sector_count; sector++) {
+
+		struct sffs_metadata_header header;
+		/* TODO: check return value */
+		sffs_cached_read(fs, sector * fs->sector_size, (uint8_t *)&header, sizeof(header));
+
+		char sector_state = '?';
+		if (header.state == SFFS_SECTOR_STATE_ERASED) sector_state = ' ';
+		if (header.state == SFFS_SECTOR_STATE_USED) sector_state = 'U';
+		if (header.state == SFFS_SECTOR_STATE_FULL) sector_state = 'F';
+		if (header.state == SFFS_SECTOR_STATE_DIRTY) sector_state = 'D';
+		printf("%04d [%c]: ", sector, sector_state);
+
+		for (uint32_t i = 0; i < fs->data_pages_per_sector; i++) {
+			uint32_t item_pos = sector * fs->sector_size + sizeof(struct sffs_metadata_header) + i * sizeof(struct sffs_metadata_item);
+			struct sffs_metadata_item item;
+			/* TODO: check return value */
+			sffs_cached_read(fs, item_pos, (uint8_t *)&item, sizeof(struct sffs_metadata_item));
+
+			char page_state = '?';
+			if (item.state == SFFS_PAGE_STATE_ERASED) page_state = ' ';
+			if (item.state == SFFS_PAGE_STATE_USED) page_state = 'U';
+			if (item.state == SFFS_PAGE_STATE_MOVING) page_state = 'M';
+			if (item.state == SFFS_PAGE_STATE_RESERVED) page_state = 'R';
+			if (item.state == SFFS_PAGE_STATE_OLD) page_state = 'O';
+			printf("[%c] ", page_state);
+		}
+
+		printf("\n");
+	}
+
+
+	return SFFS_DEBUG_PRINT_OK;
 }
 
 /**
@@ -123,8 +251,8 @@ int32_t sffs_metadata_header_check(struct sffs *fs, struct sffs_metadata_header 
 
 
 /**
- * Try to fetch requested block of data from read cache. If requested data
- * is not found in the cache, read whole page from the flash.
+ * Try to fetch requested block of data from read cache. If requested data is not
+ * found in the cache, read whole page from the flash.
  * 
  * @param fs TODO
  * @param addr TODO
@@ -134,8 +262,14 @@ int32_t sffs_metadata_header_check(struct sffs *fs, struct sffs_metadata_header 
  * @return TODO
  */
 int32_t sffs_cached_read(struct sffs *fs, uint32_t addr, uint8_t *data, uint32_t len) {
+	assert(fs != NULL);
+	assert(data != NULL);
 	
+	if (flash_page_read(fs->flash, addr, data, len) != FLASH_PAGE_READ_OK) {
+		return SFFS_CACHED_READ_FAILED;
+	}
 	
+	return SFFS_CACHED_READ_OK;
 }
 
 
@@ -186,27 +320,41 @@ int32_t sffs_find_page(struct sffs *fs, uint32_t file_id, uint32_t block, uint32
 
 
 
-int32_t sffs_open_id() {
+
+
+
+
+int32_t sffs_open_id(struct sffs_file *f, uint32_t file_id) {
+
+}
+
+
+int32_t sffs_close(struct sffs_file *f) {
+
+}
+
+
+int32_t sffs_write(struct sffs_file *f, unsigned char *buf, uint32_t len) {
 	
 }
 
 
-int32_t sffs_close() {
+int32_t sffs_write_pos(struct sffs_file *f, unsigned char *buf, uint32_t pos, uint32_t len) {
 	
 }
 
 
-int32_t sffs_write() {
+int32_t sffs_read(struct sffs_file *f, unsigned char *buf, uint32_t len) {
 	
 }
 
 
-int32_t sffs_read() {
+int32_t sffs_read_pos(struct sffs_file *f, unsigned char *buf, uint32_t pos, uint32_t len) {
 	
 }
 
 
-int32_t sffs_seek() {
+int32_t sffs_seek(struct sffs_file *f) {
 	
 }
 

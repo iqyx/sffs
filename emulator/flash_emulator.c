@@ -40,7 +40,7 @@ int32_t flash_init(struct flash_dev *flash, uint32_t size) {
 	if (flash->data == NULL) {
 		return FLASH_INIT_FAILED;
 	}
-	
+
 	return FLASH_INIT_OK;
 }
 
@@ -60,7 +60,7 @@ int32_t flash_free(struct flash_dev *flash) {
 	assert(flash->data != NULL);
 	free(flash->data);
 	flash->size = 0;
-	
+
 	return FLASH_FREE_OK;
 }
 
@@ -78,11 +78,17 @@ int32_t flash_free(struct flash_dev *flash) {
 int32_t flash_get_info(struct flash_dev *flash, struct flash_info *info) {
 	assert(flash != NULL);
 	assert(info != NULL);
-	
+
+/*
 	info->capacity = 1024 * 1024;
 	info->page_size = 256;
 	info->sector_size = 4096;
 	info->block_size = 65536;
+*/
+	info->capacity = 32768;
+	info->page_size = 256;
+	info->sector_size = 4096;
+	info->block_size = 4096;
 	
 	return FLASH_GET_INFO_OK;
 }
@@ -167,7 +173,7 @@ int32_t flash_page_write(struct flash_dev *flash, const uint32_t addr, const uin
 	assert((addr + len) <= flash->size);
 	assert((addr + len) <= ((addr / flash->page_size) * flash->page_size + flash->page_size));
 	assert(data != NULL);
-	
+
 	for (uint32_t i = 0; i < len; i++) {
 		flash->data[addr + i] &= data[i];
 	}
@@ -184,7 +190,7 @@ int32_t flash_page_read(struct flash_dev *flash, const uint32_t addr, uint8_t *d
 	assert((addr + len) <= flash->size);
 	assert((addr + len) <= ((addr / flash->page_size) * flash->page_size + flash->page_size));
 	assert(data != NULL);
-	
+
 	memcpy(data, &(flash->data[addr]), len);
 	
 	return FLASH_PAGE_READ_OK;

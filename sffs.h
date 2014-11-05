@@ -218,23 +218,27 @@ int32_t sffs_set_page_state(struct sffs *fs, struct sffs_page *page, uint8_t pag
 #define SFFS_SET_PAGE_STATE_OK 0
 #define SFFS_SET_PAGE_STATE_FAILED -1
 
+int32_t sffs_check_file_opened(struct sffs_file *f);
+#define SFFS_CHECK_FILE_OPENED_OK 0
+#define SFFS_CHECK_FILE_OPENED_FAILED -1
+
+
+/***************************** File manipulation functions, public API **********************************/
+
 int32_t sffs_open_id(struct sffs *fs, struct sffs_file *f, uint32_t file_id);
 #define SFFS_OPEN_ID_OK 0
 #define SFFS_OPEN_ID_FAILED -1
 
 int32_t sffs_close(struct sffs_file *f);
+#define SFFS_CLOSE_OK 0
+#define SFFS_CLOSE_FAILED -1
 
 int32_t sffs_write(struct sffs_file *f, unsigned char *buf, uint32_t len);
-#define SFFS_WRITE_OK 0
-#define SFFS_WRITE_FAILED -1
-
-int32_t sffs_write_pos(struct sffs_file *f, unsigned char *buf, uint32_t pos, uint32_t len);
 
 int32_t sffs_read(struct sffs_file *f, unsigned char *buf, uint32_t len);
 
-int32_t sffs_read_pos(struct sffs_file *f, unsigned char *buf, uint32_t pos, uint32_t len);
-
 int32_t sffs_seek(struct sffs_file *f);
-
+#define SFFS_SEEK_OK 0
+#define SFFS_SEEK_FAILED -1
 
 #endif

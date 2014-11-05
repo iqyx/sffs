@@ -275,6 +275,17 @@ int32_t sffs_cached_read(struct sffs *fs, uint32_t addr, uint8_t *data, uint32_t
 }
 
 
+/**
+ * Write one page to cache.
+ * 
+ * @param fs A SFFS filesystem with cache.
+ * @param addr Starting address of page to be written.
+ * @param data Buffer with data.
+ * @param len Length of data to be written.
+ * 
+ * @return SFFS_CACHED_WRITE_OK on success or
+ *         SFFS_CACHED_WRITE_FAILED otherwise.
+ */
 int32_t sffs_cached_write(struct sffs *fs, uint32_t addr, uint8_t *data, uint32_t len) {
 	assert(fs != NULL);
 	assert(data != NULL);
@@ -285,6 +296,7 @@ int32_t sffs_cached_write(struct sffs *fs, uint32_t addr, uint8_t *data, uint32_
 	
 	return SFFS_CACHED_WRITE_OK;
 }
+
 
 /**
  * Find data page for specified file_id and block.
@@ -329,7 +341,16 @@ int32_t sffs_find_page(struct sffs *fs, uint32_t file_id, uint32_t block, struct
 }
 
 
-
+/**
+ * Try to find erased page suitable to be written with file contents.
+ * 
+ * @param fs A SFFS filesystem.
+ * @param page Pointer to page structure which will be filled if page is found.
+ * 
+ * @return SFFS_FIND_ERASED_PAGE_OK on success,
+ *         SFFS_FIND_ERASED_PAGE_NOT_FOUND if no erased page was found or
+ *         SFFS_FIND_ERASED_PAGE_FAILED otherwise.
+ */
 int32_t sffs_find_erased_page(struct sffs *fs, struct sffs_page *page) {
 	assert(fs != NULL);
 	assert(page != NULL);
@@ -362,6 +383,16 @@ int32_t sffs_find_erased_page(struct sffs *fs, struct sffs_page *page) {
 }
 
 
+/**
+ * Compute and return address of specified data page.
+ * 
+ * @param fs A SFFS filesystem.
+ * @param page A page to return address of.
+ * @param addr Pointer to page address.
+ * 
+ * @return SFFS_PAGE_ADDR_OK on success or
+ *         SFFS_PAGE_ADDR_FAILED otherwise.
+ */
 int32_t sffs_page_addr(struct sffs *fs, struct sffs_page *page, uint32_t *addr) {
 	assert(page != NULL);
 	assert(addr != NULL);
@@ -481,12 +512,28 @@ int32_t sffs_set_page_state(struct sffs *fs, struct sffs_page *page, uint8_t pag
 }
 
 
-
-
+/**
+ * Check if specified file is opened.
+ * 
+ * @param f SFFS file to be checked.
+ * 
+ * @return SFFS_CHECK_FILE_OPENED_OK of the file is opened or
+ *         SFFS_CHECK_FILE_OPENED_FAILED otherwise.
+ */
+int32_t sffs_check_file_opened(struct sffs_file *f) {
+	assert(f != NULL);
+	
+	/* file is probably not opened. TODO: better check */
+	if (f->file_id == 0 || f->fs == NULL) {
+		return SFFS_CHECK_FILE_OPENED_FAILED;
+	}
+	
+	return SFFS_CHECK_FILE_OPENED_OK;
+}
 
 
 /**
- * Open a file according to its ID.
+ * Open a file by its ID.
  * 
  * @param fs A SFFS filesystem with the file.
  * @param f SFFS file structure.
@@ -508,18 +555,44 @@ int32_t sffs_open_id(struct sffs *fs, struct sffs_file *f, uint32_t file_id) {
 }
 
 
+/**
+ * Close a previously opened file.
+ * 
+ * @param f SFFS File to close.
+ * 
+ * @return SFFS_CLOSE_OK on success or
+ *         SFFS_CLOSE_FAILED otherwise.
+ */
 int32_t sffs_close(struct sffs_file *f) {
+	assert(f != NULL);
 
+	if (sffs_check_file_opened(f) != SFFS_CHECK_FILE_OPENED_OK) {
+		return SFFS_CLOSE_FAILED;
+	}
+
+	f->file_id = 0;
+	f->fs = NULL;
+	
+	return SFFS_CLOSE_OK;
 }
 
 
+/**
+ * Write data buffer to an opened file at current position. Position in the file
+ * is updated afterwards.
+ * 
+ * @param f SFFS file to write data to.
+ * @param buf Buffer containing data to be written.
+ * @param len Length of data to be written.
+ * 
+ * @return number of bytes written or -1 if error occured.
+ */
 int32_t sffs_write(struct sffs_file *f, unsigned char *buf, uint32_t len) {
 	assert(f != NULL);
 	assert(buf != NULL);
 	
-	/* file is probably not opened. TODO: better check */
-	if (f->file_id == 0 || f->fs == NULL) {
-		return SFFS_WRITE_FAILED;
+	if (sffs_check_file_opened(f) != SFFS_CHECK_FILE_OPENED_OK) {
+		return -1;
 	}
 
 	/* Write buffer can span multiple flash blocks. We need to determine
@@ -539,7 +612,7 @@ int32_t sffs_write(struct sffs_file *f, unsigned char *buf, uint32_t len) {
 			uint32_t addr;
 			sffs_page_addr(f->fs, &page, &addr);
 			if (sffs_cached_read(f->fs, addr, page_data, sizeof(page_data)) != SFFS_CACHED_READ_OK) {
-				return SFFS_WRITE_FAILED;
+				return -1;
 			}
 			
 			loaded_old = 1;
@@ -574,12 +647,13 @@ int32_t sffs_write(struct sffs_file *f, unsigned char *buf, uint32_t len) {
 		assert(dest_len <= len);
 		
 		/* TODO: write actual data */
+		memcpy(&(page_data[dest_offset]), &(buf[source_offset]), dest_len);
 		
 		/* find new erased page and mark is as reserved (prepared for writing).
 		 * Mark old page as moving. */
 		struct sffs_page new_page;
 		if (sffs_find_erased_page(f->fs, &new_page) != SFFS_FIND_ERASED_PAGE_OK) {
-			return SFFS_WRITE_FAILED;
+			return -1;
 		}
 		
 		if (loaded_old) {
@@ -592,7 +666,7 @@ int32_t sffs_write(struct sffs_file *f, unsigned char *buf, uint32_t len) {
 		uint32_t addr;
 		sffs_page_addr(f->fs, &new_page, &addr);
 		if (sffs_cached_write(f->fs, addr, page_data, sizeof(page_data)) != SFFS_CACHED_WRITE_OK) {
-			return SFFS_WRITE_FAILED;
+			return -1;
 		}
 		
 		if (loaded_old) {
@@ -600,7 +674,7 @@ int32_t sffs_write(struct sffs_file *f, unsigned char *buf, uint32_t len) {
 		}
 		struct sffs_metadata_item item;
 		item.block = i;
-		item.size = f->fs->page_size;
+		item.size = data_end % f->fs->page_size + 1;
 		item.state = SFFS_PAGE_STATE_USED;
 		item.file_id = f->file_id;
 		sffs_set_page_metadata(f->fs, &new_page, &item);
@@ -608,18 +682,105 @@ int32_t sffs_write(struct sffs_file *f, unsigned char *buf, uint32_t len) {
 	
 	f->pos += len;
 	
-	return SFFS_WRITE_OK;
+	return len;
 }
 
 
-
+/**
+ * Read up to len bytes of data from specified opened file starting at actual
+ * position.
+ * 
+ * @param f A SFFS File.
+ * @param buf A buffer for read data.
+ * @param len Length of data to be read from the file.
+ * 
+ * @return -1 on error,
+ *         0 if no more data can be read or
+ *         number of bytes read.
+ */
 int32_t sffs_read(struct sffs_file *f, unsigned char *buf, uint32_t len) {
+	assert(f != NULL);
+	assert(buf != NULL);
+	assert(len > 0);
+
+	if (sffs_check_file_opened(f) != SFFS_CHECK_FILE_OPENED_OK) {
+		return -1;
+	}
+
+	uint32_t b_start = f->pos / f->fs->page_size;
+	uint32_t b_end = (f->pos + len - 1) / f->fs->page_size;
+
+	uint32_t bytes_read = 0;
+
+	/* iterate over all flash pages which need to be read */
+	for (uint32_t i = b_start; i <= b_end; i++) {
+
+
+		uint8_t page_data[f->fs->page_size];
+		struct sffs_page page;
+		uint32_t dest_len;
+		
+		if (sffs_find_page(f->fs, f->file_id, i, &page) == SFFS_FIND_PAGE_OK) {
+			uint32_t addr;
+			sffs_page_addr(f->fs, &page, &addr);
+			if (sffs_cached_read(f->fs, addr, page_data, sizeof(page_data)) != SFFS_CACHED_READ_OK) {
+				return -1;
+			}
+
+			struct sffs_metadata_item item;
+			sffs_get_page_metadata(f->fs, &page, &item);
+
+			uint32_t file_crop = i * f->fs->page_size + item.size - 1;
+			uint32_t data_start = f->pos;
+			uint32_t data_end = f->pos + len - 1;
+			
+			/* crop to current page boundaries */
+			data_start = MAX(data_start, i * f->fs->page_size);
+			data_end = MIN(data_end, (i + 1) * f->fs->page_size - 1);
+			data_end = MIN(data_end, file_crop);
+			
+			/* get offset in the source buffer */
+			uint32_t source_offset = data_start - f->pos;
+			
+			/* get offset in the destination buffer */
+			uint32_t dest_offset = data_start % f->fs->page_size;
+			
+			/* length of data to be writte is the difference between cropped data */
+			dest_len = data_end - data_start + 1;
 	
+			assert(source_offset < len);
+			assert(dest_offset < f->fs->page_size);
+			assert(dest_len <= f->fs->page_size);
+			assert(dest_len <= len);
+
+			printf("reading from page %d, offset %d, length %d to  to buf[%d-%d]\n", i, dest_offset, dest_len, source_offset, source_offset + dest_len);
+			memcpy(&(buf[source_offset]), &(page_data[dest_offset]), dest_len);
+		} else {
+			/* no more bytes to read */
+			break;
+		}
+		
+		bytes_read += dest_len;
+	}
+	
+	f->pos += bytes_read;
+
+	return bytes_read;
 }
 
 
+/**
+ * Update write/read position within an opened file.
+ * 
+ * @param f SFFS file.
+ * 
+ * @return SFFS_SEEK_OK on success or
+ *         SFFS_SEEK_FAILED otherwise.
+ */
 int32_t sffs_seek(struct sffs_file *f) {
-	
+	assert(f != NULL);
+
+	return SFFS_SEEK_OK;
 }
 
 

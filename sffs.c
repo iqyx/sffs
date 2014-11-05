@@ -26,11 +26,14 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <assert.h>
+#include <string.h>
 
 #include "sffs.h"
 #include "flash_emulator.h"
 
 
+#define MIN(a,b) (((a)<(b))?(a):(b))
+#define MAX(a,b) (((a)>(b))?(a):(b))
 
 /**
  * Initialize SFFS filesystem structure and allocate all required resources.
@@ -87,7 +90,9 @@ int32_t sffs_mount(struct sffs *fs, struct flash_dev *flash) {
 	/* Find first page of file "0", it should contain filesystem metadata */
 	struct sffs_master_page master;
 	struct sffs_file f;
-	sffs_open_id(&f, 0);
+	if (sffs_open_id(fs, &f, 0) != SFFS_OPEN_ID_OK) {
+		return SFFS_MOUNT_FAILED;
+	}
 	sffs_read(&f, (unsigned char *)&master, sizeof(master));
 	sffs_close(&f);
 
@@ -199,6 +204,7 @@ int32_t sffs_debug_print(struct sffs *fs) {
 		if (header.state == SFFS_SECTOR_STATE_USED) sector_state = 'U';
 		if (header.state == SFFS_SECTOR_STATE_FULL) sector_state = 'F';
 		if (header.state == SFFS_SECTOR_STATE_DIRTY) sector_state = 'D';
+		if (header.state == SFFS_SECTOR_STATE_OLD) sector_state = 'O';
 		printf("%04d [%c]: ", sector, sector_state);
 
 		for (uint32_t i = 0; i < fs->data_pages_per_sector; i++) {
@@ -218,6 +224,7 @@ int32_t sffs_debug_print(struct sffs *fs) {
 
 		printf("\n");
 	}
+	printf("\n");
 
 
 	return SFFS_DEBUG_PRINT_OK;
@@ -241,11 +248,6 @@ int32_t sffs_metadata_header_check(struct sffs *fs, struct sffs_metadata_header 
 		return SFFS_METADATA_HEADER_CHECK_FAILED;
 	}
 
-	/* there is more metadata pages than the sector can contain */
-	if (header->metadata_page_count >= (fs->sector_size / fs->page_size)) {
-		return SFFS_METADATA_HEADER_CHECK_FAILED;
-	}
-	
 	return SFFS_METADATA_HEADER_CHECK_OK;
 }
 
@@ -273,6 +275,17 @@ int32_t sffs_cached_read(struct sffs *fs, uint32_t addr, uint8_t *data, uint32_t
 }
 
 
+int32_t sffs_cached_write(struct sffs *fs, uint32_t addr, uint8_t *data, uint32_t len) {
+	assert(fs != NULL);
+	assert(data != NULL);
+
+	if (flash_page_write(fs->flash, addr, data, len) != FLASH_PAGE_WRITE_OK) {
+		return SFFS_CACHED_WRITE_FAILED;
+	}
+	
+	return SFFS_CACHED_WRITE_OK;
+}
+
 /**
  * Find data page for specified file_id and block.
  * 
@@ -285,9 +298,9 @@ int32_t sffs_cached_read(struct sffs *fs, uint32_t addr, uint8_t *data, uint32_t
  *         SFFS_FIND_PAGE_NOT_FOUND of no such file/block was found or
  *         SFFS_FIND_PAGE_FAILED otherwise.
  */
-int32_t sffs_find_page(struct sffs *fs, uint32_t file_id, uint32_t block, uint32_t *addr, uint8_t page_state) {
+int32_t sffs_find_page(struct sffs *fs, uint32_t file_id, uint32_t block, struct sffs_page *page) {
 	assert(fs != NULL);
-	assert(addr != NULL);
+	assert(page != NULL);
 	
 	/* first we need to iterate over all sectors in the flash */
 	for (uint32_t sector = 0; sector < fs->sector_count; sector++) {
@@ -295,8 +308,39 @@ int32_t sffs_find_page(struct sffs *fs, uint32_t file_id, uint32_t block, uint32
 		/* TODO: check return value */
 		sffs_cached_read(fs, sector * fs->sector_size, (uint8_t *)&header, sizeof(header));
 		
-		/* if the sector is "dirty" or "erased", skip it */
-		if (header.state == SFFS_SECTOR_STATE_DIRTY || header.state == SFFS_SECTOR_STATE_ERASED) {
+		//~ if (header.state == SFFS_SECTOR_STATE_ERASED) {
+			//~ continue;
+		//~ }
+		
+		for (uint32_t i = 0; i < fs->data_pages_per_sector; i++) {
+			struct sffs_metadata_item item;
+			sffs_get_page_metadata(fs, &(struct sffs_page){ .sector = sector, .page = i }, &item);
+
+			/* check if page contains valid data for requested file */
+			if (item.file_id == file_id && item.block == block && (item.state == SFFS_PAGE_STATE_USED || item.state == SFFS_PAGE_STATE_MOVING)) {
+				page->sector = sector;
+				page->page = i;
+				return SFFS_FIND_PAGE_OK;
+			}
+		}
+	}
+	
+	return SFFS_FIND_PAGE_NOT_FOUND;
+}
+
+
+
+int32_t sffs_find_erased_page(struct sffs *fs, struct sffs_page *page) {
+	assert(fs != NULL);
+	assert(page != NULL);
+	
+	/* first we need to iterate over all sectors in the flash */
+	for (uint32_t sector = 0; sector < fs->sector_count; sector++) {
+		struct sffs_metadata_header header;
+		/* TODO: check return value */
+		sffs_cached_read(fs, sector * fs->sector_size, (uint8_t *)&header, sizeof(header));
+		
+		if (header.state == SFFS_SECTOR_STATE_DIRTY || header.state == SFFS_SECTOR_STATE_FULL) {
 			continue;
 		} 
 		
@@ -305,16 +349,135 @@ int32_t sffs_find_page(struct sffs *fs, uint32_t file_id, uint32_t block, uint32
 			struct sffs_metadata_item item;
 			/* TODO: check return value */
 			sffs_cached_read(fs, item_pos, (uint8_t *)&item, sizeof(struct sffs_metadata_item));
+			
+			if (item.state == SFFS_PAGE_STATE_ERASED) {
+				page->sector = sector;
+				page->page = i;
+				return SFFS_FIND_ERASED_PAGE_OK;
+			}
 		}
 	}
 	
+	return SFFS_FIND_ERASED_PAGE_NOT_FOUND;
+}
 
 
-
-
-
+int32_t sffs_page_addr(struct sffs *fs, struct sffs_page *page, uint32_t *addr) {
+	assert(page != NULL);
+	assert(addr != NULL);
 	
-	return SFFS_FIND_PAGE_NOT_FOUND;
+	*addr = page->sector * fs->sector_size + (fs->first_data_page + page->page) * fs->page_size;
+	
+	return SFFS_PAGE_ADDR_OK;
+}
+
+
+int32_t sffs_update_sector_metadata(struct sffs *fs, uint32_t sector) {
+	assert(fs != NULL);
+	assert(sector < fs->sector_count);
+
+	struct sffs_metadata_header header;
+	if (sffs_cached_read(fs, sector * fs->sector_size, (uint8_t *)&header, sizeof(header)) != SFFS_CACHED_READ_OK) {
+		return SFFS_UPDATE_SECTOR_METADATA_FAILED;
+	}
+
+	if (sffs_metadata_header_check(fs, &header) != SFFS_METADATA_HEADER_CHECK_OK) {
+		return SFFS_UPDATE_SECTOR_METADATA_FAILED;
+	}
+
+	uint32_t p_erased = 0;
+	uint32_t p_reserved = 0;
+	uint32_t p_used = 0;
+	uint32_t p_moving = 0;
+	uint32_t p_old = 0;
+	
+
+	for (uint32_t i = 0; i < fs->data_pages_per_sector; i++) {
+		struct sffs_metadata_item item;
+		sffs_get_page_metadata(fs, &(struct sffs_page){ .sector = sector, .page = i }, &item);
+		
+		if (item.state == SFFS_PAGE_STATE_ERASED) p_erased++;
+		if (item.state == SFFS_PAGE_STATE_RESERVED) p_reserved++;
+		if (item.state == SFFS_PAGE_STATE_USED) p_used++;
+		if (item.state == SFFS_PAGE_STATE_MOVING) p_moving++;
+		if (item.state == SFFS_PAGE_STATE_OLD) p_old++;
+	}
+
+	int update_ok = 0;
+
+	if (p_erased == fs->data_pages_per_sector && p_reserved == 0 && p_used == 0 && p_moving == 0 && p_old == 0) {
+		header.state = SFFS_SECTOR_STATE_ERASED;
+		update_ok = 1;
+	}
+
+	if (p_erased > 0 && (p_reserved > 0 || p_used > 0 || p_moving > 0 || p_old > 0)) {
+		header.state = SFFS_SECTOR_STATE_USED;
+		update_ok = 1;
+	}
+
+	if (p_erased == 0 && p_old == 0) {
+		header.state = SFFS_SECTOR_STATE_FULL;
+		update_ok = 1;
+	}
+	
+	if (p_erased == 0 && (p_reserved + p_used + p_moving + p_old) == fs->data_pages_per_sector) {
+		header.state = SFFS_SECTOR_STATE_DIRTY;
+		update_ok = 1;
+	}
+	
+	if (p_old == fs->data_pages_per_sector) {
+		header.state = SFFS_SECTOR_STATE_OLD;
+		update_ok = 1;
+	}
+	
+	if (update_ok == 1) {
+		if (sffs_cached_write(fs, sector * fs->sector_size, (uint8_t *)&header, sizeof(header)) != SFFS_CACHED_WRITE_OK) {
+			return SFFS_UPDATE_SECTOR_METADATA_FAILED;
+		}
+		return SFFS_UPDATE_SECTOR_METADATA_OK;
+	}
+
+	assert(0);
+	return SFFS_UPDATE_SECTOR_METADATA_FAILED;
+}
+
+
+int32_t sffs_get_page_metadata(struct sffs *fs, struct sffs_page *page, struct sffs_metadata_item *item) {
+	assert(fs != NULL);
+	assert(page != NULL);
+	assert(item != NULL);
+	
+	uint32_t item_pos = page->sector * fs->sector_size + sizeof(struct sffs_metadata_header) + page->page * sizeof(struct sffs_metadata_item);
+	sffs_cached_read(fs, item_pos, (uint8_t *)item, sizeof(struct sffs_metadata_item));
+	
+	return SFFS_GET_PAGE_METADATA_OK;
+}
+
+
+int32_t sffs_set_page_metadata(struct sffs *fs, struct sffs_page *page, struct sffs_metadata_item *item) {
+	assert(fs != NULL);
+	assert(page != NULL);
+	assert(item != NULL);
+
+	uint32_t item_pos = page->sector * fs->sector_size + sizeof(struct sffs_metadata_header) + page->page * sizeof(struct sffs_metadata_item);
+	sffs_cached_write(fs, item_pos, (uint8_t *)item, sizeof(struct sffs_metadata_item));
+	
+	sffs_update_sector_metadata(fs, page->sector);
+	
+	return SFFS_SET_PAGE_MATEDATA_OK;
+}
+
+
+int32_t sffs_set_page_state(struct sffs *fs, struct sffs_page *page, uint8_t page_state) {
+	assert(fs != NULL);
+	assert(page != NULL);
+
+	struct sffs_metadata_item item;
+	sffs_get_page_metadata(fs, page, &item);
+	item.state = page_state;
+	sffs_set_page_metadata(fs, page, &item);
+
+	return SFFS_SET_PAGE_STATE_OK;
 }
 
 
@@ -322,10 +485,26 @@ int32_t sffs_find_page(struct sffs *fs, uint32_t file_id, uint32_t block, uint32
 
 
 
-
-
-int32_t sffs_open_id(struct sffs_file *f, uint32_t file_id) {
-
+/**
+ * Open a file according to its ID.
+ * 
+ * @param fs A SFFS filesystem with the file.
+ * @param f SFFS file structure.
+ * @param id ID of file to be opened.
+ * 
+ * @return SFFS_OPEN_ID_OK on success or
+ *         SFFS_OPEN_ID_FAILED otherwise.
+ */
+int32_t sffs_open_id(struct sffs *fs, struct sffs_file *f, uint32_t file_id) {
+	assert(fs != NULL);
+	assert(f != NULL);
+	assert(file_id != 0xffff);
+	
+	f->pos = 0;
+	f->fs = fs;
+	f->file_id = file_id;
+	
+	return SFFS_OPEN_ID_OK;
 }
 
 
@@ -335,21 +514,106 @@ int32_t sffs_close(struct sffs_file *f) {
 
 
 int32_t sffs_write(struct sffs_file *f, unsigned char *buf, uint32_t len) {
+	assert(f != NULL);
+	assert(buf != NULL);
 	
+	/* file is probably not opened. TODO: better check */
+	if (f->file_id == 0 || f->fs == NULL) {
+		return SFFS_WRITE_FAILED;
+	}
+
+	/* Write buffer can span multiple flash blocks. We need to determine
+	 * where the buffer starts and ends. */
+	uint32_t b_start = f->pos / f->fs->page_size;
+	uint32_t b_end = (f->pos + len - 1) / f->fs->page_size;
+
+	/* now we can iterate over all flash pages which need to be modified */
+	for (uint32_t i = b_start; i <= b_end; i++) {
+
+		uint8_t page_data[f->fs->page_size];
+		struct sffs_page page;
+		uint32_t loaded_old = 0;
+		
+		if (sffs_find_page(f->fs, f->file_id, i, &page) == SFFS_FIND_PAGE_OK) {
+			/* page is valid. Get its address and read from flash */
+			uint32_t addr;
+			sffs_page_addr(f->fs, &page, &addr);
+			if (sffs_cached_read(f->fs, addr, page_data, sizeof(page_data)) != SFFS_CACHED_READ_OK) {
+				return SFFS_WRITE_FAILED;
+			}
+			
+			loaded_old = 1;
+		} else {
+			/* the file doesn't have allocated requested page. Create
+			 * new one filled with zeroes */
+			memset(page_data, 0x00, sizeof(page_data));
+		}
+		
+		/* determine where data wants to be written */
+		uint32_t data_start = f->pos;
+		uint32_t data_end = f->pos + len - 1;
+		
+		/* crop to current page boundaries */
+		data_start = MAX(data_start, i * f->fs->page_size);
+		data_end = MIN(data_end, (i + 1) * f->fs->page_size - 1);
+		
+		/* get offset in the source buffer */
+		uint32_t source_offset = data_start - f->pos;
+		
+		/* get offset in the destination buffer */
+		uint32_t dest_offset = data_start % f->fs->page_size;
+		
+		/* length of data to be writte is the difference between cropped data */
+		uint32_t dest_len = data_end - data_start + 1;
+
+		printf("writing buf[%d-%d] to page %d, offset %d, length %d\n", source_offset, source_offset + dest_len, i, dest_offset, dest_len);
+		
+		assert(source_offset < len);
+		assert(dest_offset < f->fs->page_size);
+		assert(dest_len <= f->fs->page_size);
+		assert(dest_len <= len);
+		
+		/* TODO: write actual data */
+		
+		/* find new erased page and mark is as reserved (prepared for writing).
+		 * Mark old page as moving. */
+		struct sffs_page new_page;
+		if (sffs_find_erased_page(f->fs, &new_page) != SFFS_FIND_ERASED_PAGE_OK) {
+			return SFFS_WRITE_FAILED;
+		}
+		
+		if (loaded_old) {
+			sffs_set_page_state(f->fs, &page, SFFS_PAGE_STATE_MOVING);
+		}
+		sffs_set_page_state(f->fs, &new_page, SFFS_PAGE_STATE_RESERVED);
+		
+		/* Finally write modified page, set its state to used and set state of
+		 * old page to old- */
+		uint32_t addr;
+		sffs_page_addr(f->fs, &new_page, &addr);
+		if (sffs_cached_write(f->fs, addr, page_data, sizeof(page_data)) != SFFS_CACHED_WRITE_OK) {
+			return SFFS_WRITE_FAILED;
+		}
+		
+		if (loaded_old) {
+			sffs_set_page_state(f->fs, &page, SFFS_PAGE_STATE_OLD);
+		}
+		struct sffs_metadata_item item;
+		item.block = i;
+		item.size = f->fs->page_size;
+		item.state = SFFS_PAGE_STATE_USED;
+		item.file_id = f->file_id;
+		sffs_set_page_metadata(f->fs, &new_page, &item);
+	}
+	
+	f->pos += len;
+	
+	return SFFS_WRITE_OK;
 }
 
-
-int32_t sffs_write_pos(struct sffs_file *f, unsigned char *buf, uint32_t pos, uint32_t len) {
-	
-}
 
 
 int32_t sffs_read(struct sffs_file *f, unsigned char *buf, uint32_t len) {
-	
-}
-
-
-int32_t sffs_read_pos(struct sffs_file *f, unsigned char *buf, uint32_t pos, uint32_t len) {
 	
 }
 

@@ -48,6 +48,14 @@ struct sffs {
 
 struct sffs_file {
 	uint32_t pos;
+	uint16_t file_id;
+	
+	struct sffs *fs;	
+};
+
+struct sffs_page {
+	uint32_t sector;
+	uint32_t page;
 	
 };
 
@@ -83,13 +91,14 @@ struct __attribute__((__packed__)) sffs_master_page {
  * be erased after all used pages are moved to another places. */
 #define SFFS_SECTOR_STATE_DIRTY 0x46
 
+/* Old sector contains only old pages, it can be safely erased */
+#define SFFS_SECTOR_STATE_OLD 0x42
+
 
 struct __attribute__((__packed__)) sffs_metadata_header {
 	uint32_t magic;
 	
 	uint8_t state;
-	uint8_t metadata_page_count;
-	uint8_t metadata_item_cound;
 	uint8_t reserved;
 };
 
@@ -97,18 +106,19 @@ struct __attribute__((__packed__)) sffs_metadata_header {
 /* Page is erased (full of 0xff) */
 #define SFFS_PAGE_STATE_ERASED 0xB7
 
+/* Reserved state means that this page is no longer available for new files and
+ * write operation is in progress. */
+#define SFFS_PAGE_STATE_RESERVED 0xB5
+
 /* Page is marked as used (ie. it is part of a file). Pages marked as used are
  * searched when file contents is requested */
-#define SFFS_PAGE_STATE_USED 0xB5
+#define SFFS_PAGE_STATE_USED 0x35
 
 /* Moving state means that this page was previously marked as used but now it is
  * being overwritten/moved to another location. New page (destination) must be
  * marked as reserved during this time. */
-#define SFFS_PAGE_STATE_MOVING 0x35
+#define SFFS_PAGE_STATE_MOVING 0x34
 
-/* Reserved state means that this page is no longer available for new files and
- * write operation is in progress. */
-#define SFFS_PAGE_STATE_RESERVED 0x34
 
 /* All expired used pages are marked as old. They are prepared to be erased. */
 #define SFFS_PAGE_STATE_OLD 0x24
@@ -174,19 +184,56 @@ int32_t sffs_cached_read(struct sffs *fs, uint32_t addr, uint8_t *data, uint32_t
 #define SFFS_CACHED_READ_OK 0
 #define SFFS_CACHED_READ_FAILED -1
 
-int32_t sffs_find_page(struct sffs *fs, uint32_t file_id, uint32_t block, uint32_t *addr, uint8_t page_state);
+int32_t sffs_cached_write(struct sffs *fs, uint32_t addr, uint8_t *data, uint32_t len);
+#define SFFS_CACHED_WRITE_OK 0
+#define SFFS_CACHED_WRITE_FAILED -1
+
+int32_t sffs_find_page(struct sffs *fs, uint32_t file_id, uint32_t block, struct sffs_page *page);
 #define SFFS_FIND_PAGE_OK 0
 #define SFFS_FIND_PAGE_NOT_FOUND -1
 #define SFFS_FIND_PAGE_FAILED -2
 
+int32_t sffs_find_erased_page(struct sffs *fs, struct sffs_page *page);
+#define SFFS_FIND_ERASED_PAGE_OK 0
+#define SFFS_FIND_ERASED_PAGE_NOT_FOUND -1
+#define SFFS_FIND_ERASED_PAGE_FAILED -2
 
+int32_t sffs_page_addr(struct sffs *fs, struct sffs_page *page, uint32_t *addr);
+#define SFFS_PAGE_ADDR_OK 0
+#define SFFS_PAGE_ADDR_FAILED -1
 
-int32_t sffs_open_id(struct sffs_file *f, uint32_t file_id);
+int32_t sffs_update_sector_metadata(struct sffs *fs, uint32_t sector);
+#define SFFS_UPDATE_SECTOR_METADATA_OK 0
+#define SFFS_UPDATE_SECTOR_METADATA_FAILED -1
+
+int32_t sffs_get_page_metadata(struct sffs *fs, struct sffs_page *page, struct sffs_metadata_item *item);
+#define SFFS_GET_PAGE_METADATA_OK 0
+#define SFFS_GET_PAGE_METADATA_FAILED -1
+
+int32_t sffs_set_page_metadata(struct sffs *fs, struct sffs_page *page, struct sffs_metadata_item *item);
+#define SFFS_SET_PAGE_MATEDATA_OK 0
+#define SFFS_SET_PAGE_MATEDATA_FAILED -1
+
+int32_t sffs_set_page_state(struct sffs *fs, struct sffs_page *page, uint8_t page_state);
+#define SFFS_SET_PAGE_STATE_OK 0
+#define SFFS_SET_PAGE_STATE_FAILED -1
+
+int32_t sffs_open_id(struct sffs *fs, struct sffs_file *f, uint32_t file_id);
+#define SFFS_OPEN_ID_OK 0
+#define SFFS_OPEN_ID_FAILED -1
+
 int32_t sffs_close(struct sffs_file *f);
+
 int32_t sffs_write(struct sffs_file *f, unsigned char *buf, uint32_t len);
+#define SFFS_WRITE_OK 0
+#define SFFS_WRITE_FAILED -1
+
 int32_t sffs_write_pos(struct sffs_file *f, unsigned char *buf, uint32_t pos, uint32_t len);
+
 int32_t sffs_read(struct sffs_file *f, unsigned char *buf, uint32_t len);
+
 int32_t sffs_read_pos(struct sffs_file *f, unsigned char *buf, uint32_t pos, uint32_t len);
+
 int32_t sffs_seek(struct sffs_file *f);
 
 

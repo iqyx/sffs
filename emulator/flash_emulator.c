@@ -85,10 +85,10 @@ int32_t flash_get_info(struct flash_dev *flash, struct flash_info *info) {
 	info->sector_size = 4096;
 	info->block_size = 65536;
 */
-	info->capacity = 32768;
+	info->capacity = 1024 * 1024;
 	info->page_size = 256;
-	info->sector_size = 4096;
-	info->block_size = 4096;
+	info->sector_size = 8192;
+	info->block_size = 8192;
 	
 	return FLASH_GET_INFO_OK;
 }
@@ -125,7 +125,7 @@ int32_t flash_block_erase(struct flash_dev *flash, const uint32_t addr) {
 	assert(addr < flash->size);
 	assert((addr % flash->block_size) == 0);
 	
-	memset(flash->data + (addr / flash->block_size), 0xff, flash->block_size);
+	memset(&(flash->data[addr]), 0xff, flash->block_size);
 	
 	return FLASH_BLOCK_ERASE_OK;
 }
@@ -147,7 +147,7 @@ int32_t flash_sector_erase(struct flash_dev *flash, const uint32_t addr) {
 	assert(addr < flash->size);
 	assert((addr % flash->sector_size) == 0);
 
-	memset(&(flash->data[addr / flash->sector_size]), 0xff, flash->sector_size);
+	memset(&(flash->data[addr]), 0xff, flash->sector_size);
 	
 	return FLASH_SECTOR_ERASE_OK;
 }

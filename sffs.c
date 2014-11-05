@@ -149,32 +149,17 @@ int32_t sffs_format(struct flash_dev *flash) {
 	
 	struct flash_info info;
 	flash_get_info(flash, &info);
-	
-	/* TODO: compute data page count */
-	uint32_t data_page_count =
-		(info.sector_size - sizeof(struct sffs_metadata_header)) /
-		(sizeof(struct sffs_metadata_item) + info.page_size);
-	
-	for (uint32_t sector = 0; sector < (info.capacity / info.sector_size); sector++) {
 
-		/* prepare and write sector header */
-		struct sffs_metadata_header header;
-		header.magic = SFFS_METADATA_MAGIC;
-		header.state = SFFS_SECTOR_STATE_ERASED;
-		/* TODO: fill other fields */
-		
-		flash_page_write(flash, info.sector_size * sector, (uint8_t *)&header, sizeof(header));
+	/* we need to simulate filesystem structure somehow (sector format functions
+	 * operate on mounted filesystem). For this purpose we mount the filesystem
+	 * using local sffs structure. Mount fails as no master page can be read,
+	 * we ignore this silently, return code is intentionally unchecked. */
+	struct sffs fs;
+	sffs_mount(&fs, flash);
 
-		/* prepare and write sector metadata items */
-		for (uint32_t i = 0; i < data_page_count; i++) {
-			struct sffs_metadata_item item;
-			item.file_id = 0xffff;
-			item.block = 0xffff;
-			item.state = SFFS_PAGE_STATE_ERASED;
-			item.size = 0xffff;
-			
-			flash_page_write(flash, info.sector_size * sector + sizeof(header) + i * sizeof(item), (uint8_t *)&item, sizeof(item));
-		}
+	/* now iterate over all sectors and format them */
+	for (uint32_t sector = 0; sector < fs.sector_count; sector++) {
+		sffs_sector_format(&fs, sector);
 	}
 	/* TODO: write master page */
 	
@@ -403,6 +388,82 @@ int32_t sffs_page_addr(struct sffs *fs, struct sffs_page *page, uint32_t *addr) 
 }
 
 
+int32_t sffs_sector_format(struct sffs *fs, uint32_t sector) {
+	assert(fs != NULL);
+	assert(sector < fs->sector_count);
+
+	printf("sector format %d\n", sector);
+	flash_sector_erase(fs->flash, sector * fs->sector_size);
+
+	/* prepare and write sector header */
+	struct sffs_metadata_header header;
+	header.magic = SFFS_METADATA_MAGIC;
+	header.state = SFFS_SECTOR_STATE_ERASED;
+	/* TODO: fill other fields */
+	flash_page_write(fs->flash, fs->sector_size * sector, (uint8_t *)&header, sizeof(header));
+
+	/* prepare and write sector metadata items */
+	for (uint32_t i = 0; i < fs->data_pages_per_sector; i++) {
+		struct sffs_metadata_item item;
+		item.file_id = 0xffff;
+		item.block = 0xffff;
+		item.state = SFFS_PAGE_STATE_ERASED;
+		item.size = 0xffff;
+		
+		/* sffs_set_page_metadata cannot be used here as the remaining sector
+		 * metadata are not complete yet and function will fail during sector
+		 * metadata update */
+		flash_page_write(fs->flash, fs->sector_size * sector + sizeof(header) + i * sizeof(item), (uint8_t *)&item, sizeof(item));
+	}
+
+	return SFFS_SECTOR_FORMAT_OK;
+}
+
+
+/**
+ * Initiate garbage collection for a given sector. If the sector is marked as old,
+ * it is being erased automatically. If the sector is dirty, garbage collector
+ * finds out if it is worth it to move used page to other locations and erase
+ * current dirty sector.
+ * 
+ * @param A SFFS filesystem.
+ * @param sector A sector to perform garbage collection on.
+ * 
+ * @return SFFS_SECTOR_COLLECT_GARBAGE_OK on success or
+ *         SFFS_SECTOR_COLLECT_GARBALE_FAILED otherwise.
+ */
+int32_t sffs_sector_collect_garbage(struct sffs *fs, uint32_t sector) {
+	assert(fs != NULL);
+	assert(sector < fs->sector_count);
+
+	struct sffs_metadata_header header;
+	if (sffs_cached_read(fs, sector * fs->sector_size, (uint8_t *)&header, sizeof(header)) != SFFS_CACHED_READ_OK) {
+		return SFFS_UPDATE_SECTOR_METADATA_FAILED;
+	}
+
+	if (sffs_metadata_header_check(fs, &header) != SFFS_METADATA_HEADER_CHECK_OK) {
+		return SFFS_UPDATE_SECTOR_METADATA_FAILED;
+	}
+
+	if (header.state == SFFS_SECTOR_STATE_OLD) {
+		sffs_sector_format(fs, sector);
+	}
+	
+	return SFFS_SECTOR_COLLECT_GARBAGE_OK;
+}
+
+
+/**
+ * Function called after every page metadata write to update sector metadata.
+ * It iterates over all pages contained in specified sector and determines sector
+ * state. State is written to sector header afterwards.
+ * 
+ * @param fs A SFFS Filesystem.
+ * @param sector Sector to update.
+ * 
+ * @return SFFS_UPDATE_SECTOR_METADATA_OK on success or
+ *         SFFS_UPDATE_SECTOR_METADATA_FAILED otherwise.
+ */
 int32_t sffs_update_sector_metadata(struct sffs *fs, uint32_t sector) {
 	assert(fs != NULL);
 	assert(sector < fs->sector_count);
@@ -415,6 +476,8 @@ int32_t sffs_update_sector_metadata(struct sffs *fs, uint32_t sector) {
 	if (sffs_metadata_header_check(fs, &header) != SFFS_METADATA_HEADER_CHECK_OK) {
 		return SFFS_UPDATE_SECTOR_METADATA_FAILED;
 	}
+	
+	uint8_t old_state = header.state;
 
 	uint32_t p_erased = 0;
 	uint32_t p_reserved = 0;
@@ -462,9 +525,20 @@ int32_t sffs_update_sector_metadata(struct sffs *fs, uint32_t sector) {
 	}
 	
 	if (update_ok == 1) {
-		if (sffs_cached_write(fs, sector * fs->sector_size, (uint8_t *)&header, sizeof(header)) != SFFS_CACHED_WRITE_OK) {
-			return SFFS_UPDATE_SECTOR_METADATA_FAILED;
+		/* New sector state cannot be greater than the old one
+		 * (otherwise the sector metadata would need to be erased first).
+		 * This would indicate error in metadata manipulation. */
+		assert(header.state <= old_state);
+		
+		if (old_state != header.state) {
+		
+			if (sffs_cached_write(fs, sector * fs->sector_size, (uint8_t *)&header, sizeof(header)) != SFFS_CACHED_WRITE_OK) {
+				return SFFS_UPDATE_SECTOR_METADATA_FAILED;
+			}
+			
+			/* sffs_sector_collect_garbage(fs, sector); */
 		}
+		
 		return SFFS_UPDATE_SECTOR_METADATA_OK;
 	}
 
@@ -534,6 +608,8 @@ int32_t sffs_check_file_opened(struct sffs_file *f) {
 
 /**
  * Open a file by its ID.
+ * 
+ * TODO: mode - read, overwrite, append.
  * 
  * @param fs A SFFS filesystem with the file.
  * @param f SFFS file structure.
@@ -639,7 +715,7 @@ int32_t sffs_write(struct sffs_file *f, unsigned char *buf, uint32_t len) {
 		/* length of data to be writte is the difference between cropped data */
 		uint32_t dest_len = data_end - data_start + 1;
 
-		printf("writing buf[%d-%d] to page %d, offset %d, length %d\n", source_offset, source_offset + dest_len, i, dest_offset, dest_len);
+		//~ printf("writing buf[%d-%d] to page %d, offset %d, length %d\n", source_offset, source_offset + dest_len, i, dest_offset, dest_len);
 		
 		assert(source_offset < len);
 		assert(dest_offset < f->fs->page_size);
@@ -753,7 +829,7 @@ int32_t sffs_read(struct sffs_file *f, unsigned char *buf, uint32_t len) {
 			assert(dest_len <= f->fs->page_size);
 			assert(dest_len <= len);
 
-			printf("reading from page %d, offset %d, length %d to  to buf[%d-%d]\n", i, dest_offset, dest_len, source_offset, source_offset + dest_len);
+			//~ printf("reading from page %d, offset %d, length %d to  to buf[%d-%d]\n", i, dest_offset, dest_len, source_offset, source_offset + dest_len);
 			memcpy(&(buf[source_offset]), &(page_data[dest_offset]), dest_len);
 		} else {
 			/* no more bytes to read */
@@ -783,5 +859,35 @@ int32_t sffs_seek(struct sffs_file *f) {
 	return SFFS_SEEK_OK;
 }
 
+
+/**
+ * Removes all blocks for file @a file_id. File should be closed during removal.
+ * 
+ * @param fs A SFFS filesystem.
+ * @param file_id ID of the file to remove.
+ * 
+ * @return SFFS_FILE_REMOVE_OK on success or
+ *         SFFS_FILE_REMOVE_FAILED otherise.
+ */
+int32_t sffs_file_remove(struct sffs *fs, uint32_t file_id) {
+	assert(fs != NULL);
+	
+	/* cannot remove filesystem metadata file */
+	if (file_id == 0) {
+		return SFFS_FILE_REMOVE_FAILED;
+	}
+	
+	/* iterate over file blocks until first find fails, mark all found blocks
+	 * as old (remove from file).
+	 * TODO: this action should probably be done in a safer way, interrupting
+	 * deletion sequence will cause garbage to be left in the filesystem
+	 * (file tail) */
+	uint32_t block = 0;
+	struct sffs_page page;
+	while (sffs_find_page(fs, file_id, block, &page) == SFFS_FIND_PAGE_OK) {
+		sffs_set_page_state(fs, &page, SFFS_PAGE_STATE_OLD);
+		block++;
+	}
+}
 
 

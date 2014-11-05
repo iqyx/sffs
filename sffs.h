@@ -100,6 +100,7 @@ struct __attribute__((__packed__)) sffs_metadata_header {
 	
 	uint8_t state;
 	uint8_t reserved;
+	uint16_t reserved2;
 };
 
 
@@ -202,6 +203,14 @@ int32_t sffs_page_addr(struct sffs *fs, struct sffs_page *page, uint32_t *addr);
 #define SFFS_PAGE_ADDR_OK 0
 #define SFFS_PAGE_ADDR_FAILED -1
 
+int32_t sffs_sector_format(struct sffs *fs, uint32_t sector);
+#define SFFS_SECTOR_FORMAT_OK 0
+#define SFFS_SECTOR_FORMAT_FAILED -1
+
+int32_t sffs_sector_collect_garbage(struct sffs *fs, uint32_t sector);
+#define SFFS_SECTOR_COLLECT_GARBAGE_OK 0
+#define SFFS_SECTOR_COLLECT_GARBAGE_FAILED -1
+
 int32_t sffs_update_sector_metadata(struct sffs *fs, uint32_t sector);
 #define SFFS_UPDATE_SECTOR_METADATA_OK 0
 #define SFFS_UPDATE_SECTOR_METADATA_FAILED -1
@@ -240,5 +249,9 @@ int32_t sffs_read(struct sffs_file *f, unsigned char *buf, uint32_t len);
 int32_t sffs_seek(struct sffs_file *f);
 #define SFFS_SEEK_OK 0
 #define SFFS_SEEK_FAILED -1
+
+int32_t sffs_file_remove(struct sffs *fs, uint32_t file_id);
+#define SFFS_FILE_REMOVE_OK 0
+#define SFFS_FILE_REMOVE_FAILED -1
 
 #endif

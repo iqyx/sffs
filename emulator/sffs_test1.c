@@ -15,10 +15,16 @@ struct sffs_test_file {
 	uint32_t len;
 };
 
-#define NUM_FILES 20
+#define NUM_FILES 50
 
 struct sffs_test_file files[NUM_FILES];
 
+int files_appended = 0;
+int files_created = 0;
+int files_verified = 0;
+int files_rewritten = 0;
+int files_size_checked = 0;
+int total_size = 0;
 
 static void print_hex_data(uint8_t *data, uint32_t len) {
 	printf("data = ");
@@ -57,11 +63,19 @@ static void release_test_file(struct sffs *fs, struct sffs_test_file *tf) {
 static void write_test_file(struct sffs *fs, struct sffs_test_file *tf) {
 	struct sffs_file f;
 
-	sffs_open_id(fs, &f, tf->file_id);
+	sffs_open_id(fs, &f, tf->file_id, SFFS_OVERWRITE);
 
 	uint32_t len = tf->len;
 	uint8_t *data = tf->data;
 	while (len > 0) {
+
+		/* we occasionally reaopen the file for appending */
+		if ((rand() % 10) == 0) {
+			sffs_close(&f);
+			sffs_open_id(fs, &f, tf->file_id, SFFS_APPEND);
+			files_appended++;
+		}
+
 		uint32_t block_len = rand() % 100 + 10;
 		if (block_len > len) {
 			block_len = len;
@@ -79,7 +93,7 @@ static void verify_test_file(struct sffs *fs, struct sffs_test_file *tf) {
 
 	//~ printf("#### verifying test file id=%d\n", tf->file_id);
 
-	sffs_open_id(fs, &f, tf->file_id);
+	sffs_open_id(fs, &f, tf->file_id, SFFS_READ);
 
 	uint32_t block_len;
 	uint32_t read_len = 0;
@@ -116,6 +130,19 @@ static void delete_test_file(struct sffs *fs, struct sffs_test_file *tf) {
 	sffs_file_remove(fs, tf->file_id);
 }
 
+static void size_check_test_file(struct sffs *fs, struct sffs_test_file *tf) {
+
+	uint32_t size;
+	int32_t ret = sffs_file_size(fs, tf->file_id, &size);
+	
+	if ((ret != SFFS_FILE_SIZE_OK) || (size != tf->len)) {
+		printf("file size %d corrupted (size %d, should be %d)\n", tf->file_id, size, tf->len);
+		sffs_debug_print(fs);
+		exit(1);
+	}
+
+}
+
 
 
 int main(int argc, char *argv[]) {
@@ -132,12 +159,8 @@ int main(int argc, char *argv[]) {
 	sffs_mount(&fs, &fl);
 	//~ sffs_debug_print(&fs);
 	
-	int files_created = 0;
-	int files_verified = 0;
-	int files_rewritten = 0;
-	int total_size = 0;
 
-	for (int i = 0; i < 1000000; i++) {
+	for (int i = 0; i < 10000000; i++) {
 
 		/* select one file randomly */
 		int f = rand() % NUM_FILES;
@@ -150,8 +173,8 @@ int main(int argc, char *argv[]) {
 					/* write file, possibly overwriting previous one,
 					 * which is still acceptable behaviour */
 					//~ printf("#### writing test file\n");
-					//~ write_test_file(&fs, &(files[f]));
-					//~ files_rewritten++;
+					write_test_file(&fs, &(files[f]));
+					files_rewritten++;
 					break;
 
 				case 1:
@@ -160,20 +183,25 @@ int main(int argc, char *argv[]) {
 					release_test_file(&fs, &(files[f]));
 					break;
 
+				case 2:
+					size_check_test_file(&fs, &(files[f]));
+					files_size_checked++;
+					break;
+
 				default:
 					verify_test_file(&fs, &(files[f]));
 					files_verified++;
 			}
 		} else {
 			//~ printf("#### generating test file\n");
-			generate_test_file(&fs, &(files[f]), 24000 + f, rand() % 10000 + 2000);
+			generate_test_file(&fs, &(files[f]), 24000 + f, rand() % 1000 + 500);
 			write_test_file(&fs, &(files[f]));
 			files_created++;
 			total_size += files[f].len;
 		}
 		
 		if ((i % 1000) == 0) {
-			printf("files created = %d, files verified = %d, files rewritten = %d, total file size = %d bytes\n", files_created, files_verified, files_rewritten, total_size);
+			printf("created = %d, verified = %d, rewritten = %d, appended = %d, size checked = %d, total file size = %d bytes\n", files_created, files_verified, files_rewritten, files_appended, files_size_checked, total_size);
 		}
 	}
 

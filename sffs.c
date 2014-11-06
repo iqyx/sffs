@@ -641,8 +641,8 @@ int32_t sffs_open_id(struct sffs *fs, struct sffs_file *f, uint32_t file_id, uin
 			break;
 
 		case SFFS_APPEND:
-			/* not implemented yet */
-			return SFFS_OPEN_ID_FAILED;
+			/* Determine end of the file and seek to that position. */
+			sffs_file_size(fs, file_id, &(f->pos));
 			break;
 
 		case SFFS_READ:
@@ -884,7 +884,7 @@ int32_t sffs_read(struct sffs_file *f, unsigned char *buf, uint32_t len) {
  * @return SFFS_SEEK_OK on success or
  *         SFFS_SEEK_FAILED otherwise.
  */
-int32_t sffs_seek(struct sffs_file *f) {
+int32_t sffs_seek(struct sffs_file *f, uint32_t pos) {
 	assert(f != NULL);
 
 	return SFFS_SEEK_OK;
@@ -921,6 +921,34 @@ int32_t sffs_file_remove(struct sffs *fs, uint32_t file_id) {
 	}
 	
 	return SFFS_FILE_REMOVE_OK;
+}
+
+
+/**
+ * Compute size of specified file.
+ * 
+ * @param fs A SFFS Filesystem.
+ * @param file_id File ID.
+ * 
+ * @return SFFS_FILE_SIZE_OK on success or
+ *         SFFS_FILE_SIZE_FAILED otherwise.
+ */
+int32_t sffs_file_size(struct sffs *fs, uint32_t file_id, uint32_t *size) {
+	assert(fs != NULL);
+
+	uint32_t block = 0;
+	uint32_t total_size = 0;
+	struct sffs_page page;
+	while (sffs_find_page(fs, file_id, block, &page) == SFFS_FIND_PAGE_OK) {
+		struct sffs_metadata_item item;
+		sffs_get_page_metadata(fs, &page, &item);
+		total_size += item.size;
+
+		block++;
+	}
+	*size = total_size;
+
+	return SFFS_FILE_SIZE_OK;
 }
 
 

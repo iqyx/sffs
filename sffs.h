@@ -259,12 +259,16 @@ int32_t sffs_write(struct sffs_file *f, unsigned char *buf, uint32_t len);
 
 int32_t sffs_read(struct sffs_file *f, unsigned char *buf, uint32_t len);
 
-int32_t sffs_seek(struct sffs_file *f);
+int32_t sffs_seek(struct sffs_file *f, uint32_t pos);
 #define SFFS_SEEK_OK 0
 #define SFFS_SEEK_FAILED -1
 
 int32_t sffs_file_remove(struct sffs *fs, uint32_t file_id);
 #define SFFS_FILE_REMOVE_OK 0
 #define SFFS_FILE_REMOVE_FAILED -1
+
+int32_t sffs_file_size(struct sffs *fs, uint32_t file_id, uint32_t *size);
+#define SFFS_FILE_SIZE_OK 0
+#define SFFS_FILE_SIZE_FAILED -1
 
 #endif

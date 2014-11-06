@@ -15,10 +15,19 @@ struct sffs_test_file {
 	uint32_t len;
 };
 
-#define NUM_FILES 10
+#define NUM_FILES 20
 
 struct sffs_test_file files[NUM_FILES];
 
+
+static void print_hex_data(uint8_t *data, uint32_t len) {
+	printf("data = ");
+	for (uint32_t i = 0; i < len; i++) {
+		printf("%02x ", data[i]);
+	}
+	printf("\n");
+	
+}
 
 static void generate_test_file(struct sffs *fs, struct sffs_test_file *tf, uint32_t file_id, uint32_t len) {
 	tf->len = len;
@@ -68,7 +77,7 @@ static void write_test_file(struct sffs *fs, struct sffs_test_file *tf) {
 static void verify_test_file(struct sffs *fs, struct sffs_test_file *tf) {
 	struct sffs_file f;
 
-	printf("#### verifying test file id=%d\n", tf->file_id);
+	//~ printf("#### verifying test file id=%d\n", tf->file_id);
 
 	sffs_open_id(fs, &f, tf->file_id);
 
@@ -80,6 +89,9 @@ static void verify_test_file(struct sffs *fs, struct sffs_test_file *tf) {
 		block_len = sffs_read(&f, data, rand() % 100 + 10);
 
 		if (memcmp(&(tf->data[read_len]), data, block_len)) {
+			printf("file corruption at %d\n", read_len);
+			print_hex_data(&(tf->data[read_len]), block_len);
+			print_hex_data(data, block_len);
 			same = 0;
 		}
 
@@ -92,9 +104,10 @@ static void verify_test_file(struct sffs *fs, struct sffs_test_file *tf) {
 	}
 
 	if (same) {
-		printf("file %d verified, uncorrupted, len = %d\n", tf->file_id, read_len);
+		//~ printf("file %d verified, uncorrupted, len = %d\n", tf->file_id, read_len);
 	} else {
 		printf("file %d corrupted\n", tf->file_id);
+		sffs_debug_print(fs);
 		exit(1);
 	}
 }
@@ -113,15 +126,18 @@ int main(int argc, char *argv[]) {
 	struct sffs fs;
 	
 	flash_init(&fl, 1024 * 1024);
-	flash_chip_erase(&fl);
+	//~ flash_chip_erase(&fl);
 	sffs_format(&fl);
 	sffs_init(&fs);
 	sffs_mount(&fs, &fl);
-	sffs_debug_print(&fs);
+	//~ sffs_debug_print(&fs);
 	
+	int files_created = 0;
+	int files_verified = 0;
+	int files_rewritten = 0;
+	int total_size = 0;
 
-
-	for (int i = 0; i < 80; i++) {
+	for (int i = 0; i < 1000000; i++) {
 
 		/* select one file randomly */
 		int f = rand() % NUM_FILES;
@@ -133,30 +149,38 @@ int main(int argc, char *argv[]) {
 				case 0:
 					/* write file, possibly overwriting previous one,
 					 * which is still acceptable behaviour */
-					printf("#### writing test file\n");
-					write_test_file(&fs, &(files[f]));
+					//~ printf("#### writing test file\n");
+					//~ write_test_file(&fs, &(files[f]));
+					//~ files_rewritten++;
 					break;
 
 				case 1:
-					printf("#### deleting test file\n");
+					//~ printf("#### deleting test file\n");
 					delete_test_file(&fs, &(files[f]));
 					release_test_file(&fs, &(files[f]));
 					break;
 
 				default:
 					verify_test_file(&fs, &(files[f]));
+					files_verified++;
 			}
 		} else {
-			printf("#### generating test file\n");
-			generate_test_file(&fs, &(files[f]), rand() % 65535 + 1, rand() % 5000 + 2000);
+			//~ printf("#### generating test file\n");
+			generate_test_file(&fs, &(files[f]), 24000 + f, rand() % 10000 + 2000);
 			write_test_file(&fs, &(files[f]));
+			files_created++;
+			total_size += files[f].len;
 		}
-		//~ sffs_debug_print(&fs);
-
+		
+		if ((i % 1000) == 0) {
+			printf("files created = %d, files verified = %d, files rewritten = %d, total file size = %d bytes\n", files_created, files_verified, files_rewritten, total_size);
+		}
 	}
 
 	sffs_debug_print(&fs);
 	sffs_free(&fs);
 	flash_free(&fl);
+
+
 }
 

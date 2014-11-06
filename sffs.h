@@ -154,6 +154,16 @@ struct __attribute__((__packed__)) sffs_metadata_item {
 };
 
 
+/**
+ * File open mode constants
+ */
+#define SFFS_OVERWRITE 1
+#define SFFS_APPEND 2
+#define SFFS_READ 3
+
+
+
+
 int32_t sffs_init(struct sffs *fs);
 #define SFFS_INIT_OK 0
 #define SFFS_INIT_FAILED -1
@@ -237,7 +247,7 @@ int32_t sffs_check_file_opened(struct sffs_file *f);
 
 /***************************** File manipulation functions, public API **********************************/
 
-int32_t sffs_open_id(struct sffs *fs, struct sffs_file *f, uint32_t file_id);
+int32_t sffs_open_id(struct sffs *fs, struct sffs_file *f, uint32_t file_id, uint32_t mode);
 #define SFFS_OPEN_ID_OK 0
 #define SFFS_OPEN_ID_FAILED -1
 

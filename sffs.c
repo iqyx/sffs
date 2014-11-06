@@ -90,7 +90,7 @@ int32_t sffs_mount(struct sffs *fs, struct flash_dev *flash) {
 	/* Find first page of file "0", it should contain filesystem metadata */
 	struct sffs_master_page master;
 	struct sffs_file f;
-	if (sffs_open_id(fs, &f, 0) != SFFS_OPEN_ID_OK) {
+	if (sffs_open_id(fs, &f, 0, SFFS_READ) != SFFS_OPEN_ID_OK) {
 		return SFFS_MOUNT_FAILED;
 	}
 	sffs_read(&f, (unsigned char *)&master, sizeof(master));
@@ -312,9 +312,9 @@ int32_t sffs_find_page(struct sffs *fs, uint32_t file_id, uint32_t block, struct
 		/* TODO: check return value */
 		sffs_cached_read(fs, sector * fs->sector_size, (uint8_t *)&header, sizeof(header));
 		
-		//~ if (header.state == SFFS_SECTOR_STATE_ERASED) {
-			//~ continue;
-		//~ }
+		if (header.state == SFFS_SECTOR_STATE_ERASED) {
+			continue;
+		}
 		
 		for (uint32_t i = 0; i < fs->data_pages_per_sector; i++) {
 			struct sffs_metadata_item item;
@@ -620,16 +620,40 @@ int32_t sffs_check_file_opened(struct sffs_file *f) {
  * @param fs A SFFS filesystem with the file.
  * @param f SFFS file structure.
  * @param id ID of file to be opened.
+ * @param mode Mode in whit the file will be opened, allowed values are
+ *             SFFS_OVERWRITE, SFFS_APPEND and SFFS_READ.
  * 
  * @return SFFS_OPEN_ID_OK on success or
  *         SFFS_OPEN_ID_FAILED otherwise.
  */
-int32_t sffs_open_id(struct sffs *fs, struct sffs_file *f, uint32_t file_id) {
+int32_t sffs_open_id(struct sffs *fs, struct sffs_file *f, uint32_t file_id, uint32_t mode) {
 	assert(fs != NULL);
 	assert(f != NULL);
 	assert(file_id != 0xffff);
 	
-	f->pos = 0;
+	switch (mode) {
+		case SFFS_OVERWRITE:
+			/* remove old file first, new one will be created.
+			 * We are not checking return value intentionally.
+			 * Write pointer is set to the beginning. */
+			sffs_file_remove(fs, file_id);
+			f->pos = 0;
+			break;
+
+		case SFFS_APPEND:
+			/* not implemented yet */
+			return SFFS_OPEN_ID_FAILED;
+			break;
+
+		case SFFS_READ:
+			/* Set write pointer to the beginning. */
+			f->pos = 0;
+			break;
+
+		default:
+			return SFFS_OPEN_ID_FAILED;
+	}
+
 	f->fs = fs;
 	f->file_id = file_id;
 	
@@ -895,6 +919,8 @@ int32_t sffs_file_remove(struct sffs *fs, uint32_t file_id) {
 		sffs_set_page_state(fs, &page, SFFS_PAGE_STATE_OLD);
 		block++;
 	}
+	
+	return SFFS_FILE_REMOVE_OK;
 }
 
 

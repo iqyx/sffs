@@ -79,16 +79,10 @@ int32_t flash_get_info(struct flash_dev *flash, struct flash_info *info) {
 	assert(flash != NULL);
 	assert(info != NULL);
 
-/*
-	info->capacity = 1024 * 1024;
-	info->page_size = 256;
-	info->sector_size = 4096;
-	info->block_size = 65536;
-*/
-	info->capacity = 1024 * 1024;
-	info->page_size = 256;
-	info->sector_size = 8192;
-	info->block_size = 8192;
+	info->capacity = flash->size;
+	info->page_size = flash->page_size;
+	info->sector_size = flash->sector_size;
+	info->block_size = flash->block_size;
 	
 	return FLASH_GET_INFO_OK;
 }
@@ -176,6 +170,10 @@ int32_t flash_page_write(struct flash_dev *flash, const uint32_t addr, const uin
 
 	for (uint32_t i = 0; i < len; i++) {
 		flash->data[addr + i] &= data[i];
+		if (flash->data[addr + i] != data[i]) {
+			printf("flash_emulator: bad write, erasing required, addr = %d, byte = %02x, new value = %02x\n", addr + i, flash->data[addr + i], data[i]);
+		}
+		assert(flash->data[addr + i] == data[i]);
 	}
 
 	return FLASH_PAGE_WRITE_OK;

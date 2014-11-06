@@ -174,6 +174,9 @@ int32_t sffs_format(struct flash_dev *flash);
 #define SFFS_FORMAT_OK 0
 #define SFFS_FORMAT_FAILED -1
 
+int32_t sffs_sector_debug_print(struct sffs *fs, uint32_t sector);
+#define SFFS_SECTOR_DEBUG_PRINT_OK 0
+
 int32_t sffs_debug_print(struct sffs *fs);
 #define SFFS_DEBUG_PRINT_OK 0
 

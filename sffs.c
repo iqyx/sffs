@@ -167,6 +167,42 @@ int32_t sffs_format(struct flash_dev *flash) {
 }
 
 
+int32_t sffs_sector_debug_print(struct sffs *fs, uint32_t sector) {
+	assert(fs != NULL);
+	assert(sector < fs->sector_count);
+
+	struct sffs_metadata_header header;
+	/* TODO: check return value */
+	sffs_cached_read(fs, sector * fs->sector_size, (uint8_t *)&header, sizeof(header));
+
+	char sector_state = '?';
+	if (header.state == SFFS_SECTOR_STATE_ERASED) sector_state = ' ';
+	if (header.state == SFFS_SECTOR_STATE_USED) sector_state = 'U';
+	if (header.state == SFFS_SECTOR_STATE_FULL) sector_state = 'F';
+	if (header.state == SFFS_SECTOR_STATE_DIRTY) sector_state = 'D';
+	if (header.state == SFFS_SECTOR_STATE_OLD) sector_state = 'O';
+	printf("%04d [%c]: ", sector, sector_state);
+
+	for (uint32_t i = 0; i < fs->data_pages_per_sector; i++) {
+		uint32_t item_pos = sector * fs->sector_size + sizeof(struct sffs_metadata_header) + i * sizeof(struct sffs_metadata_item);
+		struct sffs_metadata_item item;
+		/* TODO: check return value */
+		sffs_cached_read(fs, item_pos, (uint8_t *)&item, sizeof(struct sffs_metadata_item));
+
+		char page_state = '?';
+		if (item.state == SFFS_PAGE_STATE_ERASED) page_state = ' ';
+		if (item.state == SFFS_PAGE_STATE_USED) page_state = 'U';
+		if (item.state == SFFS_PAGE_STATE_MOVING) page_state = 'M';
+		if (item.state == SFFS_PAGE_STATE_RESERVED) page_state = 'R';
+		if (item.state == SFFS_PAGE_STATE_OLD) page_state = 'O';
+		printf("[%c] ", page_state);
+	}
+	printf("\n");
+
+	return SFFS_SECTOR_DEBUG_PRINT_OK;
+}
+
+
 /**
  * Print filesystem structure to stdout. It can help to visualize  how pages and
  * sectors are managed.
@@ -179,38 +215,9 @@ int32_t sffs_debug_print(struct sffs *fs) {
 	assert(fs != NULL);
 
 	for (uint32_t sector = 0; sector < fs->sector_count; sector++) {
-
-		struct sffs_metadata_header header;
-		/* TODO: check return value */
-		sffs_cached_read(fs, sector * fs->sector_size, (uint8_t *)&header, sizeof(header));
-
-		char sector_state = '?';
-		if (header.state == SFFS_SECTOR_STATE_ERASED) sector_state = ' ';
-		if (header.state == SFFS_SECTOR_STATE_USED) sector_state = 'U';
-		if (header.state == SFFS_SECTOR_STATE_FULL) sector_state = 'F';
-		if (header.state == SFFS_SECTOR_STATE_DIRTY) sector_state = 'D';
-		if (header.state == SFFS_SECTOR_STATE_OLD) sector_state = 'O';
-		printf("%04d [%c]: ", sector, sector_state);
-
-		for (uint32_t i = 0; i < fs->data_pages_per_sector; i++) {
-			uint32_t item_pos = sector * fs->sector_size + sizeof(struct sffs_metadata_header) + i * sizeof(struct sffs_metadata_item);
-			struct sffs_metadata_item item;
-			/* TODO: check return value */
-			sffs_cached_read(fs, item_pos, (uint8_t *)&item, sizeof(struct sffs_metadata_item));
-
-			char page_state = '?';
-			if (item.state == SFFS_PAGE_STATE_ERASED) page_state = ' ';
-			if (item.state == SFFS_PAGE_STATE_USED) page_state = 'U';
-			if (item.state == SFFS_PAGE_STATE_MOVING) page_state = 'M';
-			if (item.state == SFFS_PAGE_STATE_RESERVED) page_state = 'R';
-			if (item.state == SFFS_PAGE_STATE_OLD) page_state = 'O';
-			printf("[%c] ", page_state);
-		}
-
-		printf("\n");
+		sffs_sector_debug_print(fs, sector);
 	}
 	printf("\n");
-
 
 	return SFFS_DEBUG_PRINT_OK;
 }
@@ -392,7 +399,6 @@ int32_t sffs_sector_format(struct sffs *fs, uint32_t sector) {
 	assert(fs != NULL);
 	assert(sector < fs->sector_count);
 
-	printf("sector format %d\n", sector);
 	flash_sector_erase(fs->flash, sector * fs->sector_size);
 
 	/* prepare and write sector header */
@@ -536,7 +542,7 @@ int32_t sffs_update_sector_metadata(struct sffs *fs, uint32_t sector) {
 				return SFFS_UPDATE_SECTOR_METADATA_FAILED;
 			}
 			
-			/* sffs_sector_collect_garbage(fs, sector); */
+			sffs_sector_collect_garbage(fs, sector);
 		}
 		
 		return SFFS_UPDATE_SECTOR_METADATA_OK;
@@ -745,15 +751,16 @@ int32_t sffs_write(struct sffs_file *f, unsigned char *buf, uint32_t len) {
 			return -1;
 		}
 		
-		if (loaded_old) {
-			sffs_set_page_state(f->fs, &page, SFFS_PAGE_STATE_OLD);
-		}
 		struct sffs_metadata_item item;
 		item.block = i;
 		item.size = data_end % f->fs->page_size + 1;
 		item.state = SFFS_PAGE_STATE_USED;
 		item.file_id = f->file_id;
 		sffs_set_page_metadata(f->fs, &new_page, &item);
+
+		if (loaded_old) {
+			sffs_set_page_state(f->fs, &page, SFFS_PAGE_STATE_OLD);
+		}
 	}
 	
 	f->pos += len;

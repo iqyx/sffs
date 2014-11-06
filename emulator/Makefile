@@ -1,5 +1,6 @@
-
-CFLAGS=-I . -I .. -O2 --std=c99
+#CDEBUGFLAGS=-fprofile-arcs -ftest-coverage -pg -g
+CFLAGS=-I . -I .. -O3 --std=c99  $(CDEBUGFLAGS)
+LDFLAGS=-O3  $(CDEBUGFLAGS)
 CC=gcc
 LD=gcc
 
